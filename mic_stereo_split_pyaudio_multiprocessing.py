@@ -2,13 +2,17 @@ import pyaudio
 import numpy as np
 import multiprocessing
 import time
+import pika
 import matplotlib.pyplot as plt
+import matplotlib
+import json
 from matplotlib.animation import FuncAnimation
 from matplotlib.colors import LogNorm
 from matplotlib import cm
 from scipy.signal import bilinear
 from scipy.signal import lfilter
-import time
+matplotlib.use('TkAgg')
+
 
 # Constants
 CHUNK = 2**14  # Number of audio samples per chunk
@@ -18,8 +22,19 @@ CHANNELS = 2  # Mono audio
 DURATION = 10  # Duration for waterfall display in seconds
 CALIBRATION_FACTOR = 0.0238
 
+# Initialize message body to be sent to office NUC with RabbitMQ
+message_body = {}
+
 # Compute the hamming window
 window = np.hamming(CHUNK)
+
+# Initialize RabbitMQ connection
+connection = pika.BlockingConnection(
+    pika.ConnectionParameters("localhost")
+)
+channel = connection.channel()
+channel.queue_declare(queue="calibrated_right_magnitude_db_queue")  # Declare the queue
+channel.queue_declare(queue="calibrated_left_magnitude_db_queue")  # Declare the queue
 
 # Initialize the figure with 4 subplots: Frequency plot for each channel + 2 Waterfall plots
 fig, (ax1, ax2, ax3, ax4) = plt.subplots(1, 4, figsize=(20, 6))
@@ -139,6 +154,20 @@ def process_audio_ch1(data_queue, plot_queue):
                 # Print instantaneous SPL
                 print("left_spl_dba = ", left_spl_dba)
 
+                # Preparing message body
+                message_body["calibrated_left_magnitude_db"] = calibrated_left_magnitude_db.astype(np.float16).tolist()
+                message_body_json = json.dumps(message_body)
+
+                channel.basic_publish(
+                    exchange='',  # No exchange specified
+                    routing_key='calibrated_left_magnitude_db_queue',  # Routing key must match the queue name
+                    body=message_body_json,
+                    properties=pika.BasicProperties(
+                        content_type='application/json',
+                        content_encoding='utf-8'
+                    )
+                )
+
                 # Put the audio data into a plot queue for plotting
                 plot_queue.put(calibrated_left_magnitude_db)
 
@@ -171,45 +200,26 @@ def process_audio_ch2(data_queue, plot_queue):
                     # Print instantaneous SPL
                     print("right_spl_dba = ", right_spl_dba)
 
+                    # Preparing message body
+                    message_body["calibrated_right_magnitude_db"] = calibrated_right_magnitude_db.astype(np.float16).tolist()
+                    message_body_json = json.dumps(message_body)
+
+                    channel.basic_publish(
+                    exchange='',  # No exchange specified
+                    routing_key='calibrated_right_magnitude_db_queue',  # Routing key must match the queue name
+                    body=message_body_json,
+                    properties=pika.BasicProperties(
+                        content_type='application/json',
+                        content_encoding='utf-8'
+                    )
+                )
+
                     # Put the audio data into a plot queue for plotting
                     plot_queue.put(calibrated_right_magnitude_db)
                 else:
                     time.sleep(0.01)  # Sleep for a short period to prevent 100% CPU usage
     except Exception as e:
         print(f"Error in audio processing: {e}")
-
-# Function to plot the audio data in real-time
-# def update(frame, plot_queue_ch1, plot_queue_ch2, data_ch1, data_ch2, im_ch1, im_ch2):
-#     if not plot_queue_ch1.empty() and not plot_queue_ch2.empty():
-#         # Retrieve the latest FFT data from the plot queues
-#         left_channel_data_fft = plot_queue_ch1.get()
-#         calibrated_left_magnitude_db = 20 * np.log10(np.abs(left_channel_data_fft[:CHUNK // 2])/CALIBRATION_FACTOR)
-        
-#         right_channel_data_fft = plot_queue_ch2.get()
-#         calibrated_right_magnitude_db = 20 * np.log10(np.abs(right_channel_data_fft[:CHUNK // 2])/CALIBRATION_FACTOR)
-
-#         # Update frequency plots
-#         plot_frequency(ax1, calibrated_left_magnitude_db, title="Left Channel")
-#         plot_frequency(ax2, calibrated_right_magnitude_db, title="Right Channel")
-
-#         # Update the waterfall plot for left channel
-#         # Roll the data array down and insert the new FFT data
-#         data_ch1[:-1, :] = data_ch1[1:, :]  # Roll data down by one row
-#         data_ch1[-1, :] = calibrated_left_magnitude_db  # Add new data at the end
-#         im_ch1.set_data(data_ch1)  # Update the waterfall plot
-#         im_ch1.set_extent([freqs[0], freqs[-1], 0, DURATION])  # Adjust the extent
-
-#         # Update the waterfall plot for right channel
-#         # Roll the data array down and insert the new FFT data
-#         data_ch2[:-1, :] = data_ch2[1:, :]  # Roll data down by one row
-#         data_ch2[-1, :] = calibrated_right_magnitude_db  # Add new data at the end
-#         im_ch2.set_data(data_ch2)  # Update the waterfall plot
-#         im_ch2.set_extent([freqs[0], freqs[-1], 0, DURATION])  # Adjust the extent
-
-#         # Return only the updated images for blitting
-#         return [im_ch1, im_ch2]
-
-#     return []  # Return an empty list if no data available
 
 def update(frame, plot_queue_ch1, plot_queue_ch2, data_ch1, data_ch2, im_ch1, im_ch2):
     if not plot_queue_ch1.empty() and not plot_queue_ch2.empty():
@@ -299,6 +309,7 @@ b, a = A_weighting(RATE)
 
 # Main function to run the process and create the animation
 if __name__ == "__main__":
+
     # Create multiprocessing Queues for sharing data between processes
     data_queue_ch1 = multiprocessing.Queue()  # For audio acquisition and processing
     data_queue_ch2 = multiprocessing.Queue()

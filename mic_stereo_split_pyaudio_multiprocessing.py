@@ -15,7 +15,7 @@ matplotlib.use('TkAgg')
 
 
 # Constants
-CHUNK = 2**14  # Number of audio samples per chunk
+CHUNK = 2**15  # Number of audio samples per chunk
 RATE = 44100  # Sample rate (44.1 kHz)
 FORMAT = pyaudio.paInt16  # 16-bit audio format
 CHANNELS = 2  # Mono audio
@@ -115,7 +115,7 @@ def audio_acquisition(data_queue_ch1, data_queue_ch2):
         while True:
 
             # Read raw audio data from the stream
-            raw_data = np.frombuffer(stream.read(CHUNK, exception_on_overflow=True), dtype=np.int16)
+            raw_data = np.frombuffer(stream.read(CHUNK, exception_on_overflow=False), dtype=np.int16)
             left_channel_data = raw_data[::2]
             right_channel_data = raw_data[1::2]
 

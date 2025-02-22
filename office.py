@@ -15,7 +15,7 @@ matplotlib.use('TkAgg')
 
 
 # Constants
-CHUNK = 2**14  # Number of audio samples per chunk
+CHUNK = 2**15  # Number of audio samples per chunk
 RATE = 44100  # Sample rate (44.1 kHz)
 FORMAT = pyaudio.paInt16  # 16-bit audio format
 CHANNELS = 2  # Mono audio

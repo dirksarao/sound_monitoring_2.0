@@ -129,97 +129,76 @@ def audio_acquisition(data_queue_ch1, data_queue_ch2):
         stream.close()
         p.terminate()
 
-# Function to process the audio data and calculate the average amplitude
-def process_audio_ch1(data_queue, plot_queue):
+def audio_calculation(data_queue):
+    audio_data = data_queue.get()  # Get the raw audio data from the queue
+
+    data_no_dc = audio_data - np.mean(audio_data)
+    data_filtered = lfilter(b, a, data_no_dc)
+
+    data_fft = np.fft.fft(window * data_filtered)
+
+    # Normalize the FFT by the window length
+    data_fft_normalized = data_fft / CHUNK
+
+    calibrated_magnitude_db = 20 * np.log10(np.abs(data_fft_normalized[:CHUNK // 2]) / CALIBRATION_FACTOR)
+
+    # Calculate and display the instantaneous SPL for the left channel
+    rms = np.sqrt(np.mean(np.square(np.abs(calibrated_magnitude_db))))  # RMS of the raw signal
+    spl_dba = 20 * np.log10(rms / CALIBRATION_FACTOR)  # SPL in dBA (20 µPa reference)
+
+    return spl_dba, calibrated_magnitude_db
+
+    # Print instantaneous SPL
+    print("left_spl_dba = ", rms_dba)
+
+def process_audio(data_queue_ch1, data_queue_ch2, plot_queue_ch1, plot_queue_ch2):
     try:
         while True:
-            if not data_queue.empty():
+            if not data_queue_ch1.empty() and not data_queue_ch2.empty():
+                audio_data_ch1 = data_queue_ch1
+                audio_data_ch2 = data_queue_ch2
 
-                audio_data_ch1 = data_queue.get()  # Get the raw audio data from the queue
-
-                left_channel_data_no_dc = audio_data_ch1 - np.mean(audio_data_ch1)
-                left_channel_filtered = lfilter(b, a, left_channel_data_no_dc)
-
-                left_channel_data_fft = np.fft.fft(window * left_channel_filtered)
-
-                # Normalize the FFT by the window length
-                left_channel_data_fft_normalized = left_channel_data_fft / CHUNK
-
-                calibrated_left_magnitude_db = 20 * np.log10(np.abs(left_channel_data_fft_normalized[:CHUNK // 2]) / CALIBRATION_FACTOR)
-
-                # Calculate and display the instantaneous SPL for the left channel
-                left_rms = np.sqrt(np.mean(np.square(np.abs(left_channel_filtered))))  # RMS of the raw signal
-                left_spl_dba = 20 * np.log10(left_rms / CALIBRATION_FACTOR)  # SPL in dBA (20 µPa reference)
+                left_spl_dba, calibrated_left_magnitude_db = audio_calculation(audio_data_ch1)
+                right_spl_dba, calibrated_right_magnitude_db = audio_calculation(audio_data_ch2)
 
                 # Print instantaneous SPL
                 print("left_spl_dba = ", left_spl_dba)
-
-                # Preparing message body
-                message_body["calibrated_left_magnitude_db"] = calibrated_left_magnitude_db.astype(np.float16).tolist()
-                message_body_json = json.dumps(message_body)
-
-                channel.basic_publish(
-                    exchange='',  # No exchange specified
-                    routing_key='calibrated_left_magnitude_db_queue',  # Routing key must match the queue name
-                    body=message_body_json,
-                    properties=pika.BasicProperties(
-                        content_type='application/json',
-                        content_encoding='utf-8'
-                    )
-                )
+                print("right_spl_dba = ", right_spl_dba)
 
                 # Put the audio data into a plot queue for plotting
-                plot_queue.put(calibrated_left_magnitude_db)
-
+                plot_queue_ch1.put(calibrated_left_magnitude_db)
+                plot_queue_ch2.put(calibrated_right_magnitude_db)
             else:
                 time.sleep(0.01)  # Sleep for a short period to prevent 100% CPU usage
     except Exception as e:
         print(f"Error in audio processing (ch1): {e}")
 
-def process_audio_ch2(data_queue, plot_queue):
-    try:
-        while True:
-                if not data_queue.empty():
-                    audio_data_ch2 = data_queue.get()  # Get the raw audio data from the queue
+def process_data_egress(plot_queue_ch1, plot_queue_ch2):
+                
+    if not data_queue_ch1.empty() and not data_queue_ch2.empty():
+        calibrated_left_magnitude_db = plot_queue_ch1.get()
+        calibrated_right_magnitude_db = plot_queue_ch2.get()
 
-                    right_channel_data_no_dc = audio_data_ch2 - np.mean(audio_data_ch2)
-                    right_channel_filtered = lfilter(b, a, right_channel_data_no_dc)
+        # Preparing message body
+        message_body = {
+            "calibrated_left_magnitude_db": calibrated_left_magnitude_db.astype(np.float16).tolist(),
+            "calibrated_right_magnitude_db": calibrated_right_magnitude_db.astype(np.float16).tolist()
+        }
 
-                    right_channel_data_fft = np.fft.fft(window * right_channel_filtered)
+        # Convert message_body to JSON string
+        message_body_json = json.dumps(message_body)
 
-                    # Normalize the FFT by the window length
-                    right_channel_data_fft_normalized = right_channel_data_fft / CHUNK
+        # Send to RabbitMQ
+        channel.basic_publish(
+            exchange='',
+            routing_key='calibrated_left_magnitude_db_queue',  # The queue name
+            body=message_body_json,  # Send the serialized JSON body
+            properties=pika.BasicProperties(
+                content_type='application/json',
+                content_encoding='utf-8'
+            )
+        )
 
-                    calibrated_right_magnitude_db = 20 * np.log10(np.abs(right_channel_data_fft_normalized[:CHUNK // 2]) / CALIBRATION_FACTOR)
-
-                    # Calculate and display the instantaneous SPL for the left channel
-                    right_rms = np.sqrt(np.mean(np.square(np.abs(right_channel_filtered))))  # RMS of the raw signal
-                    print("right_rms = ", right_rms)
-                    right_spl_dba = 20 * np.log10(right_rms / CALIBRATION_FACTOR)  # SPL in dBA (20 µPa reference)
-
-                    # Print instantaneous SPL
-                    print("right_spl_dba = ", right_spl_dba)
-
-                    # Preparing message body
-                    message_body["calibrated_right_magnitude_db"] = calibrated_right_magnitude_db.astype(np.float16).tolist()
-                    message_body_json = json.dumps(message_body)
-
-                    channel.basic_publish(
-                    exchange='',  # No exchange specified
-                    routing_key='calibrated_right_magnitude_db_queue',  # Routing key must match the queue name
-                    body=message_body_json,
-                    properties=pika.BasicProperties(
-                        content_type='application/json',
-                        content_encoding='utf-8'
-                    )
-                )
-
-                    # Put the audio data into a plot queue for plotting
-                    plot_queue.put(calibrated_right_magnitude_db)
-                else:
-                    time.sleep(0.01)  # Sleep for a short period to prevent 100% CPU usage
-    except Exception as e:
-        print(f"Error in audio processing: {e}")
 
 def update(frame, plot_queue_ch1, plot_queue_ch2, data_ch1, data_ch2, im_ch1, im_ch2):
     if not plot_queue_ch1.empty() and not plot_queue_ch2.empty():
@@ -318,13 +297,13 @@ if __name__ == "__main__":
 
     # Create the processes for audio acquisition, audio processing, and plotting
     acquisition_process = multiprocessing.Process(target=audio_acquisition, args=(data_queue_ch1,data_queue_ch2))
-    processing_process_ch1 = multiprocessing.Process(target=process_audio_ch1, args=(data_queue_ch1, plot_queue_ch1))
-    processing_process_ch2 = multiprocessing.Process(target=process_audio_ch2, args=(data_queue_ch2, plot_queue_ch2))
+    audio_process = multiprocessing.Process(target=process_audio, args=(data_queue_ch1, data_queue_ch2, plot_queue_ch1, plot_queue_ch2))
+    data_egress_process = multiprocessing.Process(target=process_data_egress, args=(plot_queue_ch1, plot_queue_ch2))
 
     # Start the processes
     acquisition_process.start()
-    processing_process_ch1.start()
-    processing_process_ch2.start()
+    audio_process.start()
+    data_egress_process.start()
 
     # Create the animation
     ani = FuncAnimation(
@@ -337,5 +316,5 @@ if __name__ == "__main__":
 
     # Wait for the processes to finish (in this case, this will run indefinitely)
     acquisition_process.join()
-    processing_process_ch1.join()
-    processing_process_ch2.join()
+    audio_process.join()
+    data_egress_process.join()

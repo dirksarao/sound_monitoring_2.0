@@ -180,24 +180,22 @@ def process_data_egress(plot_queue_ch1, plot_queue_ch2):
         calibrated_right_magnitude_db = plot_queue_ch2.get()
 
         # Preparing message body
-        message_body = {
+        message_body_ch1 = {
             "calibrated_left_magnitude_db": calibrated_left_magnitude_db.astype(np.float16).tolist(),
+        }
+
+        message_body_ch2 = {
             "calibrated_right_magnitude_db": calibrated_right_magnitude_db.astype(np.float16).tolist()
         }
 
         # Convert message_body to JSON string
-        message_body_json = json.dumps(message_body)
+        message_body_json_ch1 = json.dumps(message_body_ch1)
+        message_body_json_ch2 = json.dumps(message_body_ch2)
 
         # Send to RabbitMQ
-        channel.basic_publish(
-            exchange='',
-            routing_key='calibrated_left_magnitude_db_queue',  # The queue name
-            body=message_body_json,  # Send the serialized JSON body
-            properties=pika.BasicProperties(
-                content_type='application/json',
-                content_encoding='utf-8'
-            )
-        )
+        channel.basic_publish(exchange='', routing_key='calibrated_left_magnitude_db_queue', body=message_body_json_ch1)
+        channel.basic_publish(exchange='', routing_key='calibrated_right_magnitude_db_queue', body=message_body_json_ch2)
+
 
 
 def update(frame, plot_queue_ch1, plot_queue_ch2, data_ch1, data_ch2, im_ch1, im_ch2):

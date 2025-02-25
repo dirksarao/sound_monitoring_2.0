@@ -103,22 +103,32 @@ def callback_ch2(ch, method, properties, body):
     ch.basic_ack(delivery_tag=method.delivery_tag)
 
 
-# Setup RabbitMQ connection and consume the messages
-def start_consumer(queue_name, callback_func):
-    connection = pika.BlockingConnection(pika.ConnectionParameters('localhost'))
+def start_consumer():
+    connection = pika.BlockingConnection(
+        pika.ConnectionParameters(host='localhost'))
     channel = connection.channel()
 
-    # Declare the queues (consider durable=True for persistence)
-    channel.queue_declare(queue=queue_name)
+    channel.exchange_declare(exchange='log_ch1', exchange_type='fanout')
+    channel.exchange_declare(exchange='log_ch2', exchange_type='fanout')
 
-    # Start consuming messages with the given callback function
+    result_ch1 = channel.queue_declare(queue='', exclusive=True)
+    result_ch2 = channel.queue_declare(queue='', exclusive=True)
+    
+    queue_ch1 = result_ch1.method.queue
+    queue_ch2 = result_ch2.method.queue
+
+    channel.queue_bind(exchange='log_ch1', queue=queue_ch1)
+    channel.queue_bind(exchange='log_ch2', queue=queue_ch2)
+
+    print(' [*] Waiting for logs. To exit press CTRL+C')
+
     channel.basic_consume(
-        queue=queue_name,
-        on_message_callback=callback_func,
-        auto_ack=False
-    )
-    print('Waiting for messages. To exit press CTRL+C')
+        queue=queue_ch1, on_message_callback=callback_ch1)
+    channel.basic_consume(
+        queue=queue_ch2, on_message_callback=callback_ch2)
+
     channel.start_consuming()
+
 
 def update(frame, plot_queue_ch1, plot_queue_ch2, data_ch1, data_ch2, im_ch1, im_ch2):
     if not plot_queue_ch1.empty() and not plot_queue_ch2.empty():
@@ -150,13 +160,13 @@ def update(frame, plot_queue_ch1, plot_queue_ch2, data_ch1, data_ch2, im_ch1, im
 
 # Main function to run the consumer
 if __name__ == "__main__":
-      # Queues to store FFT data for plotting
+    # Queues to store FFT data for plotting
     plot_queue_ch1 = queue.Queue()
     plot_queue_ch2 = queue.Queue()
 
     # Start the consumer in a background thread (so it doesn't block the plotting)
-    threading.Thread(target=start_consumer, args=('calibrated_left_magnitude_db_queue', callback_ch1), daemon=True).start()
-    threading.Thread(target=start_consumer, args=('calibrated_right_magnitude_db_queue', callback_ch2), daemon=True).start()
+    # threading.Thread(target=start_consumer, daemon=True).start()
+    start_consumer()
 
     # Start the animation for real-time plotting
     ani = FuncAnimation(

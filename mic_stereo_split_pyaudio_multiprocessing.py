@@ -33,8 +33,10 @@ connection = pika.BlockingConnection(
     pika.ConnectionParameters("localhost")
 )
 channel = connection.channel()
-channel.queue_declare(queue="calibrated_right_magnitude_db_queue")  # Declare the queue
-channel.queue_declare(queue="calibrated_left_magnitude_db_queue")  # Declare the queue
+channel.exchange_declare(exchange='log_ch1',
+                         exchange_type='fanout')
+channel.exchange_declare(exchange='log_ch2',
+                         exchange_type='fanout')
 
 # Initialize the figure with 4 subplots: Frequency plot for each channel + 2 Waterfall plots
 fig, (ax1, ax2, ax3, ax4) = plt.subplots(1, 4, figsize=(20, 6))
@@ -129,7 +131,7 @@ def audio_acquisition(data_queue_ch1, data_queue_ch2):
         stream.close()
         p.terminate()
 
-def audio_calculation(data_queue):
+def audio_calculation(data_queue, b, a):
     audio_data = data_queue.get()  # Get the raw audio data from the queue
 
     data_no_dc = audio_data - np.mean(audio_data)
@@ -149,53 +151,50 @@ def audio_calculation(data_queue):
     return spl_dba, calibrated_magnitude_db
 
     # Print instantaneous SPL
-    print("left_spl_dba = ", rms_dba)
+    # print("left_spl_dba = ", rms_dba)
 
-def process_audio(data_queue_ch1, data_queue_ch2, plot_queue_ch1, plot_queue_ch2):
+def process_audio(data_queue_ch1, data_queue_ch2, plot_queue_ch1, plot_queue_ch2, b, a):
     try:
         while True:
             if not data_queue_ch1.empty() and not data_queue_ch2.empty():
                 audio_data_ch1 = data_queue_ch1
                 audio_data_ch2 = data_queue_ch2
 
-                left_spl_dba, calibrated_left_magnitude_db = audio_calculation(audio_data_ch1)
-                right_spl_dba, calibrated_right_magnitude_db = audio_calculation(audio_data_ch2)
+                left_spl_dba, calibrated_left_magnitude_db = audio_calculation(audio_data_ch1, b, a)
+                right_spl_dba, calibrated_right_magnitude_db = audio_calculation(audio_data_ch2, b, a)
 
                 # Print instantaneous SPL
-                print("left_spl_dba = ", left_spl_dba)
-                print("right_spl_dba = ", right_spl_dba)
+                # print("left_spl_dba = ", left_spl_dba)
+                # print("right_spl_dba = ", right_spl_dba)
 
                 # Put the audio data into a plot queue for plotting
                 plot_queue_ch1.put(calibrated_left_magnitude_db)
                 plot_queue_ch2.put(calibrated_right_magnitude_db)
+
+                process_data_egress(calibrated_left_magnitude_db, calibrated_right_magnitude_db)
             else:
                 time.sleep(0.01)  # Sleep for a short period to prevent 100% CPU usage
     except Exception as e:
         print(f"Error in audio processing (ch1): {e}")
 
-def process_data_egress(plot_queue_ch1, plot_queue_ch2):
-                
-    if not data_queue_ch1.empty() and not data_queue_ch2.empty():
-        calibrated_left_magnitude_db = plot_queue_ch1.get()
-        calibrated_right_magnitude_db = plot_queue_ch2.get()
+def process_data_egress(data_ch1, data_ch2):
 
-        # Preparing message body
-        message_body_ch1 = {
-            "calibrated_left_magnitude_db": calibrated_left_magnitude_db.astype(np.float16).tolist(),
-        }
+    # Preparing message body
+    message_body_ch1 = {
+        "calibrated_left_magnitude_db": data_ch1.astype(np.float16).tolist(),
+    }
 
-        message_body_ch2 = {
-            "calibrated_right_magnitude_db": calibrated_right_magnitude_db.astype(np.float16).tolist()
-        }
+    message_body_ch2 = {
+        "calibrated_right_magnitude_db": data_ch2.astype(np.float16).tolist()
+    }
 
-        # Convert message_body to JSON string
-        message_body_json_ch1 = json.dumps(message_body_ch1)
-        message_body_json_ch2 = json.dumps(message_body_ch2)
+    # Convert message_body to JSON string
+    message_body_json_ch1 = json.dumps(message_body_ch1)
+    message_body_json_ch2 = json.dumps(message_body_ch2)
 
-        # Send to RabbitMQ
-        channel.basic_publish(exchange='', routing_key='calibrated_left_magnitude_db_queue', body=message_body_json_ch1)
-        channel.basic_publish(exchange='', routing_key='calibrated_right_magnitude_db_queue', body=message_body_json_ch2)
-
+    # Send to RabbitMQ
+    channel.basic_publish(exchange='log_ch1', routing_key='', body=message_body_json_ch1)
+    channel.basic_publish(exchange='log_ch2', routing_key='', body=message_body_json_ch2)
 
 
 def update(frame, plot_queue_ch1, plot_queue_ch2, data_ch1, data_ch2, im_ch1, im_ch2):
@@ -281,11 +280,11 @@ def A_weighting(fs):
 
     return b, a
 
-# Compute A-filter weights
-b, a = A_weighting(RATE)
-
 # Main function to run the process and create the animation
 if __name__ == "__main__":
+
+    # Compute A-filter weights
+    b, a = A_weighting(RATE)
 
     # Create multiprocessing Queues for sharing data between processes
     data_queue_ch1 = multiprocessing.Queue()  # For audio acquisition and processing
@@ -295,13 +294,13 @@ if __name__ == "__main__":
 
     # Create the processes for audio acquisition, audio processing, and plotting
     acquisition_process = multiprocessing.Process(target=audio_acquisition, args=(data_queue_ch1,data_queue_ch2))
-    audio_process = multiprocessing.Process(target=process_audio, args=(data_queue_ch1, data_queue_ch2, plot_queue_ch1, plot_queue_ch2))
-    data_egress_process = multiprocessing.Process(target=process_data_egress, args=(plot_queue_ch1, plot_queue_ch2))
+    audio_process = multiprocessing.Process(target=process_audio, args=(data_queue_ch1, data_queue_ch2, plot_queue_ch1, plot_queue_ch2, b, a))
+    # data_egress_process = multiprocessing.Process(target=process_data_egress, args=(plot_queue_ch1, plot_queue_ch2))
 
     # Start the processes
     acquisition_process.start()
     audio_process.start()
-    data_egress_process.start()
+    # data_egress_process.start()
 
     # Create the animation
     ani = FuncAnimation(
@@ -315,4 +314,4 @@ if __name__ == "__main__":
     # Wait for the processes to finish (in this case, this will run indefinitely)
     acquisition_process.join()
     audio_process.join()
-    data_egress_process.join()
+    # data_egress_process.join()

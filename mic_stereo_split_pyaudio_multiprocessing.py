@@ -20,7 +20,7 @@ RATE = 44100  # Sample rate (44.1 kHz)
 FORMAT = pyaudio.paInt16  # 16-bit audio format
 CHANNELS = 2  # Mono audio
 DURATION = 10  # Duration for waterfall display in seconds
-CALIBRATION_FACTOR = 0.0238
+CALIBRATION_FACTOR = 0.0225
 
 # Initialize message body to be sent to office NUC with RabbitMQ
 message_body = {}
@@ -29,8 +29,9 @@ message_body = {}
 window = np.hamming(CHUNK)
 
 # Initialize RabbitMQ connection
+credentials = pika.PlainCredentials('nuctwo', 'nuctwo')
 connection = pika.BlockingConnection(
-    pika.ConnectionParameters("localhost")
+    pika.ConnectionParameters("10.8.5.157", credentials=credentials)
 )
 channel = connection.channel()
 channel.exchange_declare(exchange='log',
@@ -143,7 +144,8 @@ def audio_calculation(data_queue, b, a):
     calibrated_magnitude_db = 20 * np.log10(np.abs(data_fft_normalized[:CHUNK // 2]) / CALIBRATION_FACTOR)
 
     # Calculate and display the instantaneous SPL for the left channel
-    rms = np.sqrt(np.mean(np.square(np.abs(calibrated_magnitude_db))))  # RMS of the raw signal
+    rms = np.sqrt(np.mean(np.square(data_filtered)))  # RMS of the raw signal
+    # print(rms) # ENABLE THIS FOR CALIBRATION
     spl_dba = 20 * np.log10(rms / CALIBRATION_FACTOR)  # SPL in dBA (20 µPa reference)
 
     return spl_dba, calibrated_magnitude_db
@@ -162,7 +164,7 @@ def process_audio(data_queue_ch1, data_queue_ch2, plot_queue_ch1, plot_queue_ch2
                 right_spl_dba, calibrated_right_magnitude_db = audio_calculation(audio_data_ch2, b, a)
 
                 # Print instantaneous SPL
-                # print("left_spl_dba = ", left_spl_dba)
+                # print("left_spl_dba = ", left_spl_dba) # ENABLE THIS FOR CALIBRATION
                 # print("right_spl_dba = ", right_spl_dba)
 
                 # Put the audio data into a plot queue for plotting

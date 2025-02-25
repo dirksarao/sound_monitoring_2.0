@@ -164,7 +164,7 @@ if __name__ == "__main__":
     # Start the animation for real-time plotting
     ani = FuncAnimation(
         fig, update, fargs=(plot_queue_ch1, plot_queue_ch2, data_ch1, data_ch2, im_ch1, im_ch2),
-        interval=50, blit=True
+        interval=50, blit=False
     )
 
     plt.show()

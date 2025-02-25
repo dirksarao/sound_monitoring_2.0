@@ -33,9 +33,7 @@ connection = pika.BlockingConnection(
     pika.ConnectionParameters("localhost")
 )
 channel = connection.channel()
-channel.exchange_declare(exchange='log_ch1',
-                         exchange_type='fanout')
-channel.exchange_declare(exchange='log_ch2',
+channel.exchange_declare(exchange='log',
                          exchange_type='fanout')
 
 # Initialize the figure with 4 subplots: Frequency plot for each channel + 2 Waterfall plots
@@ -180,21 +178,17 @@ def process_audio(data_queue_ch1, data_queue_ch2, plot_queue_ch1, plot_queue_ch2
 def process_data_egress(data_ch1, data_ch2):
 
     # Preparing message body
-    message_body_ch1 = {
+    message_body = {
         "calibrated_left_magnitude_db": data_ch1.astype(np.float16).tolist(),
-    }
-
-    message_body_ch2 = {
         "calibrated_right_magnitude_db": data_ch2.astype(np.float16).tolist()
     }
 
+
     # Convert message_body to JSON string
-    message_body_json_ch1 = json.dumps(message_body_ch1)
-    message_body_json_ch2 = json.dumps(message_body_ch2)
+    message_body_json = json.dumps(message_body)
 
     # Send to RabbitMQ
-    channel.basic_publish(exchange='log_ch1', routing_key='', body=message_body_json_ch1)
-    channel.basic_publish(exchange='log_ch2', routing_key='', body=message_body_json_ch2)
+    channel.basic_publish(exchange='log', routing_key='', body=message_body_json)
 
 
 def update(frame, plot_queue_ch1, plot_queue_ch2, data_ch1, data_ch2, im_ch1, im_ch2):

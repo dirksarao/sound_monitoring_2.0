@@ -8,6 +8,7 @@ from matplotlib import cm
 from matplotlib.animation import FuncAnimation
 import time
 import threading
+import queue
 import multiprocessing
 
 # Constants
@@ -72,31 +73,20 @@ def plot_frequency(ax, calibrated_magnitude_db, title):
     else:
         ax.lines[0].set_ydata(calibrated_magnitude_db)
 
-# Callback for Left Channel (callback_ch1)
-def callback_ch1(ch, method, properties, body):
+def callback(ch, method, properties, body):
     # Deserialize the JSON message body
     message_body = json.loads(body)
-    print("In callback ch1")
 
     # Process left channel message
     left_magnitude_exists = "calibrated_left_magnitude_db" in message_body
+    right_magnitude_exists = "calibrated_right_magnitude_db" in message_body
+
     if left_magnitude_exists:
         calibrated_left_magnitude_db = np.array(message_body["calibrated_left_magnitude_db"])
         plot_queue_ch1.put(calibrated_left_magnitude_db)
     else:
         print("Warning: Missing 'calibrated_left_magnitude_db' in the message.")
 
-    # Acknowledge the message
-    ch.basic_ack(delivery_tag=method.delivery_tag)
-
-# Callback for Right Channel (callback_ch2)
-def callback_ch2(ch, method, properties, body):
-    # Deserialize the JSON message body
-    message_body = json.loads(body)
-    print("In callback ch2")
-
-    # Process right channel message
-    right_magnitude_exists = "calibrated_right_magnitude_db" in message_body
     if right_magnitude_exists:
         calibrated_right_magnitude_db = np.array(message_body["calibrated_right_magnitude_db"])
         plot_queue_ch2.put(calibrated_right_magnitude_db)
@@ -106,37 +96,31 @@ def callback_ch2(ch, method, properties, body):
     # Acknowledge the message
     ch.basic_ack(delivery_tag=method.delivery_tag)
 
-# Start the consumers for both channels
-def start_consumer_ch1():
-    connection = pika.BlockingConnection(pika.ConnectionParameters(host='localhost'))
+
+def start_consumer():
+    connection = pika.BlockingConnection(
+        pika.ConnectionParameters(host='localhost'))
     channel = connection.channel()
-    channel.exchange_declare(exchange='log_ch1', exchange_type='fanout')
 
-    result_ch1 = channel.queue_declare(queue='', exclusive=True)
-    queue_ch1 = result_ch1.method.queue
-    channel.queue_bind(exchange='log_ch1', queue=queue_ch1)
+    channel.exchange_declare(exchange='log', exchange_type='fanout')
 
-    print(' [*] Waiting for left channel logs. To exit press CTRL+C')
+    result = channel.queue_declare(queue='', exclusive=True)
+    
+    queue = result.method.queue
 
-    channel.basic_consume(queue=queue_ch1, on_message_callback=callback_ch1)
+    channel.queue_bind(exchange='log', queue=queue)
+
+    print(' [*] Waiting for logs. To exit press CTRL+C')
+
+    channel.basic_consume(
+        queue=queue, on_message_callback=callback)
+
     channel.start_consuming()
 
-def start_consumer_ch2():
-    connection = pika.BlockingConnection(pika.ConnectionParameters(host='localhost'))
-    channel = connection.channel()
-    channel.exchange_declare(exchange='log_ch2', exchange_type='fanout')
 
-    result_ch2 = channel.queue_declare(queue='', exclusive=True)
-    queue_ch2 = result_ch2.method.queue
-    channel.queue_bind(exchange='log_ch2', queue=queue_ch2)
 
-    print(' [*] Waiting for right channel logs. To exit press CTRL+C')
-
-    channel.basic_consume(queue=queue_ch2, on_message_callback=callback_ch2)
-    channel.start_consuming()
-
-# Update function for real-time plotting
 def update(frame, plot_queue_ch1, plot_queue_ch2, data_ch1, data_ch2, im_ch1, im_ch2):
+    "In update"
     if not plot_queue_ch1.empty() and not plot_queue_ch2.empty():
 
         # Retrieve the latest FFT data from the plot queues
@@ -164,17 +148,18 @@ def update(frame, plot_queue_ch1, plot_queue_ch2, data_ch1, data_ch2, im_ch1, im
 
     return []  # Return an empty list if no data available
 
-# Main function
+# Main function to run the consumer
 if __name__ == "__main__":
     # Queues to store FFT data for plotting
     plot_queue_ch1 = multiprocessing.Queue()
     plot_queue_ch2 = multiprocessing.Queue()
 
-    # Start the consumer processes for both channels
-    consumer_process_ch1 = multiprocessing.Process(target=start_consumer_ch1)
-    consumer_process_ch2 = multiprocessing.Process(target=start_consumer_ch2)
-    consumer_process_ch1.start()
-    consumer_process_ch2.start()
+    # Start the consumer in a background thread (so it doesn't block the plotting)
+    consumer_process = multiprocessing.Process(target=start_consumer)
+
+    consumer_process.start()
+
+    # start_consumer()
 
     # Start the animation for real-time plotting
     ani = FuncAnimation(
@@ -184,5 +169,4 @@ if __name__ == "__main__":
 
     plt.show()
 
-    consumer_process_ch1.join()
-    consumer_process_ch2.join()
+    consumer_process.join()

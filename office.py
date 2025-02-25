@@ -8,7 +8,7 @@ from matplotlib import cm
 from matplotlib.animation import FuncAnimation
 import time
 import threading
-import queue
+import multiprocessing
 
 # Constants
 CHUNK = 2**14  # Number of audio samples per chunk
@@ -75,6 +75,7 @@ def plot_frequency(ax, calibrated_magnitude_db, title):
 def callback_ch1(ch, method, properties, body):
     # Deserialize the JSON message body
     message_body = json.loads(body)
+    print("In callback ch1")
 
     # Process left channel message
     left_magnitude_exists = "calibrated_left_magnitude_db" in message_body
@@ -90,6 +91,7 @@ def callback_ch1(ch, method, properties, body):
 def callback_ch2(ch, method, properties, body):
     # Deserialize the JSON message body
     message_body = json.loads(body)
+    print("In callback ch2")
 
     # Process right channel message
     right_magnitude_exists = "calibrated_right_magnitude_db" in message_body
@@ -161,12 +163,12 @@ def update(frame, plot_queue_ch1, plot_queue_ch2, data_ch1, data_ch2, im_ch1, im
 # Main function to run the consumer
 if __name__ == "__main__":
     # Queues to store FFT data for plotting
-    plot_queue_ch1 = queue.Queue()
-    plot_queue_ch2 = queue.Queue()
+    plot_queue_ch1 = multiprocessing.Queue()
+    plot_queue_ch2 = multiprocessing.Queue()
 
-    # Start the consumer in a background thread (so it doesn't block the plotting)
-    # threading.Thread(target=start_consumer, daemon=True).start()
-    start_consumer()
+    # Start the consumer in a background process (so it doesn't block the plotting)
+    consumer_process = multiprocessing.Process(target=start_consumer)
+    consumer_process.start()
 
     # Start the animation for real-time plotting
     ani = FuncAnimation(
@@ -175,3 +177,5 @@ if __name__ == "__main__":
     )
 
     plt.show()
+
+    consumer_process.join()

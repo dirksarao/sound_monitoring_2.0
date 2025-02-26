@@ -1,5 +1,3 @@
-import IPython
-
 import pyaudio
 import numpy as np
 import multiprocessing
@@ -13,6 +11,7 @@ from matplotlib.colors import LogNorm
 from matplotlib import cm
 from scipy.signal import bilinear
 from scipy.signal import lfilter
+from optparse import OptionParser
 matplotlib.use('TkAgg')
 
 
@@ -31,9 +30,9 @@ message_body = {}
 window = np.hamming(CHUNK)
 
 # Initialize RabbitMQ connection
-credentials = pika.PlainCredentials('nuctwo', 'nuctwo')
+# credentials = pika.PlainCredentials('nuctwo', 'nuctwo')
 connection = pika.BlockingConnection(
-    pika.ConnectionParameters("10.8.5.157", credentials=credentials)
+    pika.ConnectionParameters("localhost") #10.8.5.157
 )
 channel = connection.channel()
 channel.exchange_declare(exchange='log',
@@ -158,8 +157,17 @@ def audio_calculation(data_queue, b, a):
  
     return calibrated_magnitude_db
 
+def process_data_logging(data_left, data_right, opts):
+    if opts.samples is not None:
+        "Logging samples"
+    
+    if opts.time is not None:
+        print("Logging time")
 
-def process_audio(data_queue_ch1, data_queue_ch2, plot_queue_ch1, plot_queue_ch2, b, a):
+    if opts.cont:
+        print("Logging cont")
+
+def process_audio(data_queue_ch1, data_queue_ch2, plot_queue_ch1, plot_queue_ch2, b, a, opts):
     try:
         while True:
             if not data_queue_ch1.empty() and not data_queue_ch2.empty():
@@ -174,10 +182,12 @@ def process_audio(data_queue_ch1, data_queue_ch2, plot_queue_ch1, plot_queue_ch2
                 plot_queue_ch2.put(calibrated_right_magnitude_db)
 
                 process_data_egress(calibrated_left_magnitude_db, calibrated_right_magnitude_db)
+                process_data_logging(calibrated_left_magnitude_db, calibrated_right_magnitude_db, opts)
             else:
                 time.sleep(0.01)  # Sleep for a short period to prevent 100% CPU usage
     except Exception as e:
         print(f"Error in audio processing (ch1): {e}")
+
 
 def process_data_egress(data_ch1, data_ch2):
 
@@ -201,24 +211,6 @@ def update(frame, plot_queue_ch1, plot_queue_ch2, data_ch1, data_ch2, im_ch1, im
         # Retrieve the latest FFT data from the plot queues
         calibrated_left_magnitude_db = plot_queue_ch1.get()
         calibrated_right_magnitude_db = plot_queue_ch2.get()
-
-        # # Calculate and display the instantaneous SPL for the left channel
-        # left_rms = np.sqrt(np.mean(np.square(np.abs(left_channel_filtered))))  # RMS of the raw signal
-        # left_spl_dba = 20 * np.log10(left_rms / (20e-6 * CALIBRATION_FACTOR))  # SPL in dBA (20 µPa reference)
-
-        # # Calculate and display the instantaneous SPL for the right channel
-        # right_rms = np.sqrt(np.mean(np.square(np.abs(right_channel_filtered))))  # RMS of the raw signal
-        # right_spl_dba = 20 * np.log10(right_rms / (20e-6 * CALIBRATION_FACTOR))  # SPL in dBA (20 µPa reference)
-
-        # # Remove previous SPL text (only if it exists)
-        # if ax1.texts:
-        #     ax1.texts[-1].remove()
-        # if ax2.texts:
-        #     ax2.texts[-1].remove()
-
-        # # Display SPL on the plot
-        # ax1.text(0.95, 0.9, f"SPL (Left): {left_spl_dba:.2f} dBA", transform=ax1.transAxes, fontsize=12, color='black', ha='right')
-        # ax2.text(0.95, 0.9, f"SPL (Right): {right_spl_dba:.2f} dBA", transform=ax2.transAxes, fontsize=12, color='black', ha='right')
 
         # Update frequency plots
         plot_frequency(ax1, calibrated_left_magnitude_db, title="SPL vs Frequency (Left)")
@@ -278,8 +270,39 @@ def A_weighting(fs):
 
     return b, a
 
+def parse_args():
+    parser = OptionParser()
+    parser.add_option(
+        "-s",
+        "--samples",
+        help="Logs N-samples",
+        metavar="N",
+        type="int"
+    )
+    parser.add_option(
+        "-t",
+        "--time",
+        help="Logs samples within a time period",
+        metavar="TIME",
+        type="int",
+    )
+
+    parser.add_option(
+        "-c",
+        "--cont",
+        help="Logs samples continuously",
+        default=False,
+        action="store_true",
+    )
+
+    (opts, args) = parser.parse_args()
+
+    return opts, args
+
 # Main function to run the process and create the animation
 if __name__ == "__main__":
+
+    opts, args = parse_args()
 
     # Compute A-filter weights
     b, a = A_weighting(RATE)
@@ -292,7 +315,7 @@ if __name__ == "__main__":
 
     # Create the processes for audio acquisition, audio processing, and plotting
     acquisition_process = multiprocessing.Process(target=audio_acquisition, args=(data_queue_ch1,data_queue_ch2))
-    audio_process = multiprocessing.Process(target=process_audio, args=(data_queue_ch1, data_queue_ch2, plot_queue_ch1, plot_queue_ch2, b, a))
+    audio_process = multiprocessing.Process(target=process_audio, args=(data_queue_ch1, data_queue_ch2, plot_queue_ch1, plot_queue_ch2, b, a, opts))
     # data_egress_process = multiprocessing.Process(target=process_data_egress, args=(plot_queue_ch1, plot_queue_ch2))
 
     # Start the processes

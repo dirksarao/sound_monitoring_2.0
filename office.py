@@ -9,6 +9,7 @@ from matplotlib.animation import FuncAnimation
 import time
 import threading
 import queue
+import multiprocessing
 
 # Constants
 CHUNK = 2**14  # Number of audio samples per chunk
@@ -43,7 +44,7 @@ cmap = cm.colors.LinearSegmentedColormap.from_list("custom_colormap", list(zip(p
 im_ch1 = ax3.imshow(
     data_ch1, aspect="auto", origin="lower", norm=LogNorm(vmin=1, vmax=100), cmap=cmap
 )
-ax3.set_title("Left Channel Waterfall")
+ax3.set_title("Waterfall (Left)")
 ax3.set_xlabel("Frequency [Hz]")
 ax3.set_ylabel("Time Elapsed")
 ax3.set_yticks([])  # Remove y-axis ticks
@@ -52,7 +53,7 @@ ax3.set_yticks([])  # Remove y-axis ticks
 im_ch2 = ax4.imshow(
     data_ch2, aspect="auto", origin="lower", norm=LogNorm(vmin=1, vmax=100), cmap=cmap
 )
-ax4.set_title("Right Channel Waterfall")
+ax4.set_title("Waterfall (Right)")
 ax4.set_xlabel("Frequency [Hz]")
 ax4.set_ylabel("Time Elapsed")
 ax4.set_yticks([])  # Remove y-axis ticks
@@ -72,8 +73,8 @@ def plot_frequency(ax, calibrated_magnitude_db, title):
     else:
         ax.lines[0].set_ydata(calibrated_magnitude_db)
 
-# Callback function to process the incoming messages
 def callback(ch, method, properties, body):
+    # Deserialize the JSON message body
     message_body = json.loads(body)
 
     # Process left channel message
@@ -95,26 +96,31 @@ def callback(ch, method, properties, body):
     # Acknowledge the message
     ch.basic_ack(delivery_tag=method.delivery_tag)
 
-# Function to start the consumer, replacing the multiprocessing process with threading
+
 def start_consumer():
-    connection = pika.BlockingConnection(pika.ConnectionParameters(host='localhost'))
+    connection = pika.BlockingConnection(
+        pika.ConnectionParameters(host='localhost'))
     channel = connection.channel()
 
     channel.exchange_declare(exchange='log', exchange_type='fanout')
 
     result = channel.queue_declare(queue='', exclusive=True)
+    
     queue = result.method.queue
 
     channel.queue_bind(exchange='log', queue=queue)
 
     print(' [*] Waiting for logs. To exit press CTRL+C')
 
-    channel.basic_consume(queue=queue, on_message_callback=callback)
+    channel.basic_consume(
+        queue=queue, on_message_callback=callback)
 
     channel.start_consuming()
 
-# Function to update the plots during the animation
+
+
 def update(frame, plot_queue_ch1, plot_queue_ch2, data_ch1, data_ch2, im_ch1, im_ch2):
+    "In update"
     if not plot_queue_ch1.empty() and not plot_queue_ch2.empty():
 
         # Retrieve the latest FFT data from the plot queues
@@ -122,19 +128,22 @@ def update(frame, plot_queue_ch1, plot_queue_ch2, data_ch1, data_ch2, im_ch1, im
         calibrated_right_magnitude_db = plot_queue_ch2.get()
 
         # Update frequency plots
-        plot_frequency(ax1, calibrated_left_magnitude_db, title="Left Channel")
-        plot_frequency(ax2, calibrated_right_magnitude_db, title="Right Channel")
+        plot_frequency(ax1, calibrated_left_magnitude_db, title="SPL vs Frequency (Left)")
+        plot_frequency(ax2, calibrated_right_magnitude_db, title="SPL vs Frequency (Right)")
 
         # Update the waterfall plot for left channel
-        data_ch1[:-1, :] = data_ch1[1:, :]
-        data_ch1[-1, :] = calibrated_left_magnitude_db
-        im_ch1.set_data(data_ch1)
+        data_ch1[:-1, :] = data_ch1[1:, :]  # Roll data down by one row
+        data_ch1[-1, :] = calibrated_left_magnitude_db  # Add new data at the end
+        im_ch1.set_data(data_ch1)  # Update the waterfall plot
+        im_ch1.set_extent([freqs[0], freqs[-1], 0, DURATION])  # Adjust the extent
 
         # Update the waterfall plot for right channel
-        data_ch2[:-1, :] = data_ch2[1:, :]
-        data_ch2[-1, :] = calibrated_right_magnitude_db
-        im_ch2.set_data(data_ch2)
+        data_ch2[:-1, :] = data_ch2[1:, :]  # Roll data down by one row
+        data_ch2[-1, :] = calibrated_right_magnitude_db  # Add new data at the end
+        im_ch2.set_data(data_ch2)  # Update the waterfall plot
+        im_ch2.set_extent([freqs[0], freqs[-1], 0, DURATION])  # Adjust the extent
 
+        # Return only the updated images for blitting
         return [im_ch1, im_ch2]
 
     return []  # Return an empty list if no data available
@@ -142,12 +151,15 @@ def update(frame, plot_queue_ch1, plot_queue_ch2, data_ch1, data_ch2, im_ch1, im
 # Main function to run the consumer
 if __name__ == "__main__":
     # Queues to store FFT data for plotting
-    plot_queue_ch1 = queue.Queue()
-    plot_queue_ch2 = queue.Queue()
+    plot_queue_ch1 = multiprocessing.Queue()
+    plot_queue_ch2 = multiprocessing.Queue()
 
-    # Start the consumer in a background thread
-    consumer_thread = threading.Thread(target=start_consumer)
-    consumer_thread.start()
+    # Start the consumer in a background thread (so it doesn't block the plotting)
+    consumer_process = multiprocessing.Process(target=start_consumer)
+
+    consumer_process.start()
+
+    # start_consumer()
 
     # Start the animation for real-time plotting
     ani = FuncAnimation(
@@ -157,4 +169,4 @@ if __name__ == "__main__":
 
     plt.show()
 
-    consumer_thread.join()  # Ensure the consumer thread is finished before exiting
+    consumer_process.join()

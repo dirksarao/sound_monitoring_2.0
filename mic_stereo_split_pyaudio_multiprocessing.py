@@ -1,3 +1,5 @@
+import IPython
+
 import pyaudio
 import numpy as np
 import multiprocessing
@@ -20,7 +22,7 @@ RATE = 44100  # Sample rate (44.1 kHz)
 FORMAT = pyaudio.paInt16  # 16-bit audio format
 CHANNELS = 2  # Mono audio
 DURATION = 10  # Duration for waterfall display in seconds
-CALIBRATION_FACTOR = 0.0225
+CALIBRATION_FACTOR = 0.0177
 
 # Initialize message body to be sent to office NUC with RabbitMQ
 message_body = {}
@@ -65,7 +67,7 @@ cmap = cm.colors.LinearSegmentedColormap.from_list("custom_colormap", list(zip(p
 im_ch1 = ax3.imshow(
     data_ch1, aspect="auto", origin="lower", norm=LogNorm(vmin=1, vmax=100), cmap=cmap
 )
-ax3.set_title("Left Channel Waterfall")
+ax3.set_title("Waterfall (Left)")
 ax3.set_xlabel("Frequency [Hz]")
 ax3.set_ylabel("Time Elapsed")
 # Remove the y-axis numbers on the left channel waterfall plot
@@ -74,7 +76,7 @@ ax3.set_yticks([])  # Hides the y-axis tick marks and labels
 im_ch2 = ax4.imshow(
     data_ch2, aspect="auto", origin="lower", norm=LogNorm(vmin=1, vmax=100), cmap=cmap
 )
-ax4.set_title("Right Channel Waterfall")
+ax4.set_title("Waterfall (Right)")
 ax4.set_xlabel("Frequency [Hz]")
 ax4.set_ylabel("Time Elapsed")
 # Remove the y-axis numbers on the left channel waterfall plot
@@ -91,7 +93,7 @@ def plot_frequency(ax, channel_data_fft_db, title):
         
         # Set the labels and title just once (on the first plot)
         ax.set_xlabel("Frequency [Hz]")
-        ax.set_ylabel("Amplitude")
+        ax.set_ylabel("SPL [dBA]")
         ax.set_title(title)
         ax.grid(True)
         ax.legend(loc='upper right')  # Set the legend in a consistent location
@@ -139,19 +141,23 @@ def audio_calculation(data_queue, b, a):
     data_fft = np.fft.fft(window * data_filtered)
 
     # Normalize the FFT by the window length
-    data_fft_normalized = data_fft / CHUNK
+    data_fft_normalized = np.sqrt(2) * data_fft[:CHUNK // 2] / CHUNK
 
-    calibrated_magnitude_db = 20 * np.log10(np.abs(data_fft_normalized[:CHUNK // 2]) / CALIBRATION_FACTOR)
+    calibrated_magnitude_db = 20 * np.log10(np.abs(data_fft_normalized) / CALIBRATION_FACTOR)
 
     # Calculate and display the instantaneous SPL for the left channel
-    rms = np.sqrt(np.mean(np.square(data_filtered)))  # RMS of the raw signal
-    # print(rms) # ENABLE THIS FOR CALIBRATION
-    spl_dba = 20 * np.log10(rms / CALIBRATION_FACTOR)  # SPL in dBA (20 µPa reference)
+    rms_time = np.sqrt(np.mean(np.square(data_filtered*window)))  # RMS of the raw signal
+    rms_frequency_single = np.sqrt(np.sum(np.square(np.abs(data_fft_normalized)))) # RMS of the fft
 
-    return spl_dba, calibrated_magnitude_db
+    # print("rms_time = ", rms_time) # ENABLE THIS FOR CALIBRATION
+    # print("rms_frequency_single = ", rms_frequency_single) # ENABLE THIS FOR CALIBRATION
+    # spl_dba = 20 * np.log10(rms_time / CALIBRATION_FACTOR)  # SPL in dBA (20 µPa reference) # ENABLE THIS FOR CALIBRATION
+    # spl_dba_freq_single = 20 * np.log10(rms_frequency_single / CALIBRATION_FACTOR)  # SPL in dBA (20 µPa reference)
+    # print("spl_dba_time = ", left_spl_dba) # ENABLE THIS FOR CALIBRATION 
+    # print("spl_dba_freq_single = ", spl_dba_freq_single)
+ 
+    return calibrated_magnitude_db
 
-    # Print instantaneous SPL
-    # print("left_spl_dba = ", rms_dba)
 
 def process_audio(data_queue_ch1, data_queue_ch2, plot_queue_ch1, plot_queue_ch2, b, a):
     try:
@@ -160,12 +166,8 @@ def process_audio(data_queue_ch1, data_queue_ch2, plot_queue_ch1, plot_queue_ch2
                 audio_data_ch1 = data_queue_ch1
                 audio_data_ch2 = data_queue_ch2
 
-                left_spl_dba, calibrated_left_magnitude_db = audio_calculation(audio_data_ch1, b, a)
-                right_spl_dba, calibrated_right_magnitude_db = audio_calculation(audio_data_ch2, b, a)
-
-                # Print instantaneous SPL
-                # print("left_spl_dba = ", left_spl_dba) # ENABLE THIS FOR CALIBRATION
-                # print("right_spl_dba = ", right_spl_dba)
+                calibrated_left_magnitude_db = audio_calculation(audio_data_ch1, b, a)
+                calibrated_right_magnitude_db = audio_calculation(audio_data_ch2, b, a)
 
                 # Put the audio data into a plot queue for plotting
                 plot_queue_ch1.put(calibrated_left_magnitude_db)
@@ -219,8 +221,8 @@ def update(frame, plot_queue_ch1, plot_queue_ch2, data_ch1, data_ch2, im_ch1, im
         # ax2.text(0.95, 0.9, f"SPL (Right): {right_spl_dba:.2f} dBA", transform=ax2.transAxes, fontsize=12, color='black', ha='right')
 
         # Update frequency plots
-        plot_frequency(ax1, calibrated_left_magnitude_db, title="Left Channel")
-        plot_frequency(ax2, calibrated_right_magnitude_db, title="Right Channel")
+        plot_frequency(ax1, calibrated_left_magnitude_db, title="SPL vs Frequency (Left)")
+        plot_frequency(ax2, calibrated_right_magnitude_db, title="SPL vs Frequency (Right)")
 
         # Update the waterfall plot for left channel
         data_ch1[:-1, :] = data_ch1[1:, :]  # Roll data down by one row

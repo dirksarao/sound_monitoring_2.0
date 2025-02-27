@@ -6,6 +6,12 @@ import pika
 import matplotlib.pyplot as plt
 import matplotlib
 import json
+import datetime
+import os
+import h5py
+import sys
+import signal
+from pydub import AudioSegment
 from matplotlib.animation import FuncAnimation
 from matplotlib.colors import LogNorm
 from matplotlib import cm
@@ -28,6 +34,15 @@ message_body = {}
 
 # Compute the hamming window
 window = np.hamming(CHUNK)
+
+# Data logging
+LOG_FILE_NAME = "log"
+GROUP_NAME_CH1 = "channel_1"
+GROUP_NAME_CH2 = "channel_2"
+sample_counter = 0
+spectra_mp3_buffer_ch1 = []
+spectra_mp3_buffer_ch2 = []
+start_time = time.monotonic()
 
 # Initialize RabbitMQ connection
 # credentials = pika.PlainCredentials('nuctwo', 'nuctwo')
@@ -158,14 +173,231 @@ def audio_calculation(data_queue, b, a):
     return calibrated_magnitude_db
 
 def process_data_logging(data_left, data_right, opts):
-    if opts.samples is not None:
-        "Logging samples"
-    
-    if opts.time is not None:
-        print("Logging time")
+    global sample_counter
 
-    if opts.cont:
-        print("Logging cont")
+    max_ch1 = np.max(data_left)
+    max_ch2 = np.max(data_right)
+    spec_and_freq_ch1 = np.vstack((data_left, freqs))
+    spec_and_freq_ch2 = np.vstack((data_right, freqs))
+
+    log_message_ch1 = (
+            "___lab.py:___ PEAK:"
+            + str(int(max_ch1))
+            + ", Date:"
+            + datetime.datetime.now().strftime("%Y-%m-%d")
+            + ", Time:"
+            + datetime.datetime.now().strftime("%H:%M:%S")
+            + '.' + datetime.datetime.now().strftime("%f")[:3]
+        )
+    
+    log_message_ch2 = (
+            "___lab.py:___ PEAK:"
+            + str(int(max_ch2))
+            + ", Date:"
+            + datetime.datetime.now().strftime("%Y-%m-%d")
+            + ", Time:"
+            + datetime.datetime.now().strftime("%H:%M:%S")
+            + '.' + datetime.datetime.now().strftime("%f")[:3]
+        )
+
+    if opts.samples is not None:
+        if sample_counter < opts.samples:
+            log_message(log_message_ch1, log_option=f"samples", group_name=f"channel_1", spectrum=spec_and_freq_ch1)
+            log_message(log_message_ch2, log_option=f"samples", group_name=f"channel_2", spectrum=spec_and_freq_ch2)
+
+            spectra_mp3_buffer_ch1.append(data_left)
+            spectra_mp3_buffer_ch2.append(data_right)
+
+            mp3_log_message_ch1 = str(datetime.datetime.now().strftime("%Y-%m-%d")) + f"_ch1"
+            mp3_log_message_ch2 = str(datetime.datetime.now().strftime("%Y-%m-%d")) + f"_ch2"
+
+            mp3_file_location = os.path.join("log", "samples")
+
+            save_spectra(spectra_mp3_buffer_ch1, mp3_log_message_ch1, output_directory=mp3_file_location)
+            save_spectra(spectra_mp3_buffer_ch2, mp3_log_message_ch2, output_directory=mp3_file_location)
+
+            sample_counter += 1
+        else:
+            print("Sample logging has stopped")
+            plt.close()
+            connection.close()
+            exit()
+    
+    elif opts.time is not None:
+        if opts.time > 0:
+            end_time = time.monotonic()
+            elapsed_time = end_time - start_time
+            if elapsed_time < opts.time:
+                log_message(log_message_ch1, log_option=f"time", group_name=f"channel_1", spectrum=spec_and_freq_ch1)
+                log_message(log_message_ch2, log_option=f"time", group_name=f"channel_2", spectrum=spec_and_freq_ch2)
+
+                spectra_mp3_buffer_ch1.append(data_left)
+                spectra_mp3_buffer_ch2.append(data_right)
+
+                mp3_log_message_ch1 = str(datetime.datetime.now().strftime("%Y-%m-%d")) + f"_ch1"
+                mp3_log_message_ch2 = str(datetime.datetime.now().strftime("%Y-%m-%d")) + f"_ch2"
+
+                mp3_file_location = os.path.join("log", "time")
+
+                save_spectra(spectra_mp3_buffer_ch1, mp3_log_message_ch1, output_directory=mp3_file_location)
+                save_spectra(spectra_mp3_buffer_ch2, mp3_log_message_ch2, output_directory=mp3_file_location)
+
+                sample_counter += 1
+            else:
+                # If elapsed time exceeds opts.time, stop logging
+                print("Logging time has expired.")
+                # Optionally, close any resources or finish up logging. There is still a problem with how I'm closing my program.
+                connection.close()
+                plt.close()
+                sys.exit(1)
+
+
+    elif opts.cont:
+        log_message(log_message_ch1, log_option=f"cont", group_name=f"channel_1", spectrum=spec_and_freq_ch1)
+        log_message(log_message_ch2, log_option=f"cont", group_name=f"channel_2", spectrum=spec_and_freq_ch2)
+
+        spectra_mp3_buffer_ch1.append(data_left)
+        spectra_mp3_buffer_ch2.append(data_right)
+
+        mp3_log_message_ch1 = str(datetime.datetime.now().strftime("%Y-%m-%d")) + f"_ch1"
+        mp3_log_message_ch2 = str(datetime.datetime.now().strftime("%Y-%m-%d")) + f"_ch2"
+
+        mp3_file_location = os.path.join("log", "cont")
+
+        save_spectra(spectra_mp3_buffer_ch1, mp3_log_message_ch1, output_directory=mp3_file_location)
+        save_spectra(spectra_mp3_buffer_ch2, mp3_log_message_ch2, output_directory=mp3_file_location)
+
+    else:
+        if max_ch1 > 82:
+            log_message(log_message_ch1, log_option=f"", group_name=f"channel_1", spectrum=spec_and_freq_ch1)
+            mp3_log_message = (
+            datetime.datetime.now().strftime("%Y-%m-%d")
+            + datetime.datetime.now().strftime("%H:%M:%S")
+            )
+
+            mp3_file_location = os.path.join("log", "danger")
+            spectra_mp3_buffer_ch1.append(data_left)
+            mp3_log_message_ch1 = str(datetime.datetime.now().strftime("%Y-%m-%d")) + f"_ch1"
+            save_spectra(spectra_mp3_buffer_ch1, mp3_log_message_ch1, output_directory=mp3_file_location)
+            
+        if max_ch2 > 82:
+            log_message(log_message_ch2, log_option=f"", group_name=f"channel_2", spectrum=spec_and_freq_ch2)
+            mp3_log_message = (
+            datetime.datetime.now().strftime("%Y-%m-%d")
+            + datetime.datetime.now().strftime("%H:%M:%S")
+            )
+
+            mp3_file_location = os.path.join("log", "danger")
+            spectra_mp3_buffer_ch2.append(data_right)
+            mp3_log_message_ch2 = str(datetime.datetime.now().strftime("%Y-%m-%d")) + f"_ch2"
+            save_spectra(spectra_mp3_buffer_ch2, mp3_log_message_ch2, output_directory=mp3_file_location)
+
+
+def log_message(dataset_name, group_name, log_option, spectrum=None):
+    """
+    Writes a log message in a directory called "samples" within the "log"
+    directory. It creates the directory if it doesn't exist already.
+
+    Parameters:
+        -   log_file (string): Name of directory containing the sub-directories
+            for logging.
+
+        -   dataset_name (string): Name of the dataset that the new
+            log entry will be written to.
+
+        -   group_name (string): Name of the group that the new log entry will
+            be written to.
+
+        -   spectrum (2D numPy array): Frequency components and Frequencies.
+
+    Returns: void/nothing
+    """
+
+    log_file = os.path.join(LOG_FILE_NAME, log_option)
+
+    # Create directory if it doesn't exist
+    if not os.path.exists(log_file):
+        os.makedirs(log_file)
+
+    # Get current date
+    today = datetime.date.today()
+    log_file = os.path.join(log_file, f"log_{today}.{log_option}.hdf5")
+
+    if not os.path.isfile(log_file):
+        # Create the file if it doesn't exist
+        with h5py.File(log_file, "w"):
+            pass
+
+    with h5py.File(log_file, "a") as f:
+        if group_name not in f:
+            # Create the file if it doesn't exist
+            f.create_group(group_name)
+
+        # Create dataset for data array if provided
+        if spectrum is not None:
+            f[group_name].create_dataset(dataset_name, data=spectrum, dtype=np.float32)
+
+def save_spectra(spectra_list, mp3_file_name, output_directory='output_mp3'):
+    """
+    Save spectra to MP3 files. Each file corresponds to a single chunk of data.
+    
+    Parameters:
+    - spectra_list: list of numpy arrays (spectra) to be saved
+    - mp3_file_name: name of the MP3 file to be saved
+    - output_directory: directory where MP3 files will be saved
+    """
+    if not os.path.exists(output_directory):
+        os.makedirs(output_directory)
+    
+    # Initialize buffer
+    buffer = AudioSegment.empty()
+    
+    for spectra in spectra_list:
+        # Convert spectra to audio segment
+        audio_segment = spectra_to_audio(spectra, RATE)
+        
+        if audio_segment.duration_seconds > 0:  # Check if audio_segment has valid duration
+            buffer += audio_segment
+        else:
+            print("Warning: Empty audio segment detected.")
+    
+    # Save the accumulated buffer to an MP3 file
+    if buffer.duration_seconds > 0:  # Ensure there's data to save
+        output_file = os.path.join(output_directory, mp3_file_name)
+        try:
+            buffer.export(output_file, format='mp3')
+            print(f'Saved {output_file}')
+        except Exception as e:
+            print(f"Error saving file {output_file}: {e}")
+    else:
+        print("No data to save.")
+
+def spectra_to_audio(spectra, sample_rate=44100):
+    """
+    Convert spectra (time-domain samples) to an audio segment.
+    
+    Parameters:
+    - spectra: numpy array of time-domain samples
+    - sample_rate: sampling rate of the audio
+    
+    Returns:
+    - audio_segment: pydub AudioSegment
+    """
+    # Normalize to 16-bit PCM
+    spectra = np.int16(spectra / np.max(np.abs(spectra)) * 32767)
+    
+    # Convert numpy array to bytes
+    audio_data = spectra.tobytes()
+    
+    # Create an AudioSegment
+    audio_segment = AudioSegment(
+        data=audio_data,
+        sample_width=2,  # 16-bit PCM
+        frame_rate=sample_rate,
+        channels=1  # Mono
+    )
+    
+    return audio_segment
 
 def process_audio(data_queue_ch1, data_queue_ch2, plot_queue_ch1, plot_queue_ch2, b, a, opts):
     try:
@@ -299,40 +531,70 @@ def parse_args():
 
     return opts, args
 
+# Function to handle Ctrl-C gracefully
+def handle_shutdown(signal, frame):
+    print("\nGracefully shutting down...")
+    
+    # Close the RabbitMQ connection
+    try:
+        connection.close()
+    except Exception as e:
+        print(f"Error closing RabbitMQ connection: {e}")
+    
+    # Close the Matplotlib plot
+    try:
+        plt.close()
+    except Exception as e:
+        print(f"Error closing Matplotlib plot: {e}")
+
+    # If you're using PyAudio, terminate it cleanly
+    try:
+        p.terminate()  # Assuming `p` is your PyAudio instance
+    except Exception as e:
+        print(f"Error closing PyAudio: {e}")
+    
+    # Exit the program
+    sys.exit(0)
+
+# Register the signal handler
+signal.signal(signal.SIGINT, handle_shutdown)
+
 # Main function to run the process and create the animation
 if __name__ == "__main__":
 
-    opts, args = parse_args()
+    try:
+        opts, args = parse_args()
 
-    # Compute A-filter weights
-    b, a = A_weighting(RATE)
+        # Compute A-filter weights
+        b, a = A_weighting(RATE)
 
-    # Create multiprocessing Queues for sharing data between processes
-    data_queue_ch1 = multiprocessing.Queue()  # For audio acquisition and processing
-    data_queue_ch2 = multiprocessing.Queue()
-    plot_queue_ch1 = multiprocessing.Queue()  # For audio data to plot
-    plot_queue_ch2 = multiprocessing.Queue()  # For audio data to plot
+        # Create multiprocessing Queues for sharing data between processes
+        data_queue_ch1 = multiprocessing.Queue()
+        data_queue_ch2 = multiprocessing.Queue()
+        plot_queue_ch1 = multiprocessing.Queue()
+        plot_queue_ch2 = multiprocessing.Queue()
 
-    # Create the processes for audio acquisition, audio processing, and plotting
-    acquisition_process = multiprocessing.Process(target=audio_acquisition, args=(data_queue_ch1,data_queue_ch2))
-    audio_process = multiprocessing.Process(target=process_audio, args=(data_queue_ch1, data_queue_ch2, plot_queue_ch1, plot_queue_ch2, b, a, opts))
-    # data_egress_process = multiprocessing.Process(target=process_data_egress, args=(plot_queue_ch1, plot_queue_ch2))
+        # Create the processes for audio acquisition, audio processing, and plotting
+        acquisition_process = multiprocessing.Process(target=audio_acquisition, args=(data_queue_ch1, data_queue_ch2))
+        audio_process = multiprocessing.Process(target=process_audio, args=(data_queue_ch1, data_queue_ch2, plot_queue_ch1, plot_queue_ch2, b, a, opts))
 
-    # Start the processes
-    acquisition_process.start()
-    audio_process.start()
-    # data_egress_process.start()
+        # Start the processes
+        acquisition_process.start()
+        audio_process.start()
 
-    # Create the animation
-    ani = FuncAnimation(
-        fig, update, fargs=(plot_queue_ch1, plot_queue_ch2, data_ch1, data_ch2, im_ch1, im_ch2),
-        interval=50, blit=True  # Set blit to True to optimize performance
-    )
+        # Create the animation
+        ani = FuncAnimation(
+            fig, update, fargs=(plot_queue_ch1, plot_queue_ch2, data_ch1, data_ch2, im_ch1, im_ch2),
+            interval=50, blit=True
+        )
 
-    # Show the plot
-    plt.show()
+        # Show the plot
+        plt.show()
 
-    # Wait for the processes to finish (in this case, this will run indefinitely)
-    acquisition_process.join()
-    audio_process.join()
-    # data_egress_process.join()
+        # Wait for the processes to finish (in this case, this will run indefinitely)
+        acquisition_process.join()
+        audio_process.join()
+
+    except Exception as e:
+        print(f"Error in main loop: {e}")
+        sys.edit(1)

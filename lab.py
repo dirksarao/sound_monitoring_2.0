@@ -199,6 +199,23 @@ def process_data_logging(data_left, data_right, opts):
             + datetime.datetime.now().strftime("%H:%M:%S")
             + '.' + datetime.datetime.now().strftime("%f")[:3]
         )
+    
+    # Take a sample at midnight
+    now = datetime.datetime.now()
+    if (0, 0) == (now.hour, now.minute) and 0 < now.second < 5:
+        log_message(log_message_ch1, log_option=f"midnight", group_name=f"channel_1", spectrum=spec_and_freq_ch1)
+        log_message(log_message_ch2, log_option=f"midnight", group_name=f"channel_2", spectrum=spec_and_freq_ch2)
+
+        spectra_mp3_buffer_ch1.append(data_left)
+        spectra_mp3_buffer_ch2.append(data_right)
+
+        mp3_log_message_ch1 = str(datetime.datetime.now().strftime("%Y-%m-%d")) + f"_ch1"
+        mp3_log_message_ch2 = str(datetime.datetime.now().strftime("%Y-%m-%d")) + f"_ch2"
+
+        mp3_file_location = os.path.join("log", "midnight")
+
+        save_spectra(spectra_mp3_buffer_ch1, mp3_log_message_ch1, output_directory=mp3_file_location)
+        save_spectra(spectra_mp3_buffer_ch2, mp3_log_message_ch2, output_directory=mp3_file_location)
 
     if opts.samples is not None:
         if sample_counter < opts.samples:

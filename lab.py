@@ -11,6 +11,7 @@ import os
 import h5py
 import sys
 import signal
+import logging
 from pydub import AudioSegment
 from matplotlib.animation import FuncAnimation
 from matplotlib.colors import LogNorm
@@ -45,9 +46,9 @@ spectra_mp3_buffer_ch2 = []
 start_time = time.monotonic()
 
 # Initialize RabbitMQ connection
-# credentials = pika.PlainCredentials('nuctwo', 'nuctwo')
+credentials = pika.PlainCredentials('nuctwo', 'nuctwo')
 connection = pika.BlockingConnection(
-    pika.ConnectionParameters("localhost") #10.8.5.157
+    pika.ConnectionParameters("10.8.5.157", credentials=credentials) #10.8.5.157
 )
 channel = connection.channel()
 channel.exchange_declare(exchange='log',
@@ -98,6 +99,13 @@ ax4.set_yticks([])  # Hides the y-axis tick marks and labels
 
 plt.colorbar(im_ch1, ax=ax3)
 plt.colorbar(im_ch2, ax=ax4)
+
+# Set up logging
+logging.basicConfig(
+    filename='rabbitmq_error.log',
+    level=logging.ERROR,
+    format='%(asctime)s - %(levelname)s - %(message)s'
+)
 
 def plot_frequency(ax, channel_data_fft_db, title):
     # Check if the line already exists, otherwise create a new line
@@ -435,6 +443,10 @@ def process_audio(data_queue_ch1, data_queue_ch2, plot_queue_ch1, plot_queue_ch2
             else:
                 time.sleep(0.01)  # Sleep for a short period to prevent 100% CPU usage
     except Exception as e:
+        logging.error(f"Error connecting to RabbitMQ: {str(e)}")
+        now = datetime.datetime.now()
+        now = now.strftime("%Y-%m-%d %H:%M:%S")
+        print(now)
         print(f"Error in audio processing (ch1): {e}")
 
 

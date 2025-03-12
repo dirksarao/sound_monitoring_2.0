@@ -244,9 +244,9 @@ def process_data_logging(data_left, data_right, opts):
             sample_counter += 1
         else:
             print("Sample logging has stopped")
-            plt.close()
             connection.close()
-            exit()
+            plt.close()
+            sys.exit()
     
     elif opts.time is not None:
         if opts.time > 0:
@@ -424,30 +424,58 @@ def spectra_to_audio(spectra, sample_rate=44100):
     
     return audio_segment
 
-def process_audio(data_queue_ch1, data_queue_ch2, plot_queue_ch1, plot_queue_ch2, b, a, opts):
+# Function to reconnect to RabbitMQ in case of connection failure
+def reconnect_rabbitmq():
     try:
-        while True:
-            if not data_queue_ch1.empty() and not data_queue_ch2.empty():
-                audio_data_ch1 = data_queue_ch1
-                audio_data_ch2 = data_queue_ch2
-
-                calibrated_left_magnitude_db = audio_calculation(audio_data_ch1, b, a)
-                calibrated_right_magnitude_db = audio_calculation(audio_data_ch2, b, a)
-
-                # Put the audio data into a plot queue for plotting
-                plot_queue_ch1.put(calibrated_left_magnitude_db)
-                plot_queue_ch2.put(calibrated_right_magnitude_db)
-
-                process_data_egress(calibrated_left_magnitude_db, calibrated_right_magnitude_db)
-                process_data_logging(calibrated_left_magnitude_db, calibrated_right_magnitude_db, opts)
-            else:
-                time.sleep(0.01)  # Sleep for a short period to prevent 100% CPU usage
+        # Re-establish the RabbitMQ connection and channel
+        connection = pika.BlockingConnection(pika.ConnectionParameters("10.8.5.157"))
+        channel = connection.channel()
+        # Ensure that the channel is declared before using it
+        channel.exchange_declare(exchange='log',
+                         exchange_type='fanout')
+        return channel
     except Exception as e:
-        logging.error(f"Error connecting to RabbitMQ: {str(e)}")
-        now = datetime.datetime.now()
-        now = now.strftime("%Y-%m-%d %H:%M:%S")
-        print(now)
-        print(f"Error in audio processing (ch1): {e}")
+        logging.error(f"Error reconnecting to RabbitMQ: {str(e)}")
+        time.sleep(5)  # Sleep for a short time before retrying
+        return reconnect_rabbitmq()  # Retry reconnecting
+
+def process_data_egress(data_ch1, data_ch2):
+    try:
+        # Establish a connection to RabbitMQ (with reconnection logic)
+        # channel = reconnect_rabbitmq()
+
+        # Preparing message body
+        message_body = {
+            "calibrated_left_magnitude_db": data_ch1.astype(np.float16).tolist(),
+            "calibrated_right_magnitude_db": data_ch2.astype(np.float16).tolist()
+        }
+
+        # Convert message_body to JSON string
+        message_body_json = json.dumps(message_body)
+
+        # Send to RabbitMQ
+        channel.basic_publish(exchange='log', routing_key='', body=message_body_json)
+
+    except pika.exceptions.ConnectionClosedByBroker as e:
+        logging.error(f"Connection closed by broker: {e}")
+        channel = reconnect_rabbitmq()  # Reconnect to RabbitMQ
+        # Retry publishing the message after reconnecting
+        process_data_egress(data_ch1, data_ch2)
+
+    except pika.exceptions.AMQPConnectionError as e:
+        logging.error(f"Connection error: {e}")
+        channel = reconnect_rabbitmq()  # Reconnect to RabbitMQ
+        # Retry publishing the message after reconnecting
+        process_data_egress(data_ch1, data_ch2)
+
+    except ConnectionResetError as e:
+        logging.error(f"Connection reset by peer: {e}")
+        channel = reconnect_rabbitmq()  # Reconnect to RabbitMQ
+        # Retry publishing the message after reconnecting
+        process_data_egress(data_ch1, data_ch2)
+
+    except Exception as e:
+        logging.error(f"Error in data egress: {e}")
 
 
 def process_data_egress(data_ch1, data_ch2):
@@ -578,7 +606,7 @@ def handle_shutdown(signal, frame):
 
     # If you're using PyAudio, terminate it cleanly
     try:
-        p.terminate()  # Assuming `p` is your PyAudio instance
+        p.terminate() 
     except Exception as e:
         print(f"Error closing PyAudio: {e}")
     

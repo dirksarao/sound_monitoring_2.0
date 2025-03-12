@@ -439,39 +439,22 @@ def reconnect_rabbitmq():
         return reconnect_rabbitmq()  # Retry reconnecting
 
 def process_audio(data_queue_ch1, data_queue_ch2, plot_queue_ch1, plot_queue_ch2, b, a, opts):
-    try:
-        while True:
-            if not data_queue_ch1.empty() and not data_queue_ch2.empty():
-                audio_data_ch1 = data_queue_ch1
-                audio_data_ch2 = data_queue_ch2
+    while True:
+        if not data_queue_ch1.empty() and not data_queue_ch2.empty():
+            audio_data_ch1 = data_queue_ch1
+            audio_data_ch2 = data_queue_ch2
 
-                calibrated_left_magnitude_db = audio_calculation(audio_data_ch1, b, a)
-                calibrated_right_magnitude_db = audio_calculation(audio_data_ch2, b, a)
+            calibrated_left_magnitude_db = audio_calculation(audio_data_ch1, b, a)
+            calibrated_right_magnitude_db = audio_calculation(audio_data_ch2, b, a)
 
-                # Put the audio data into a plot queue for plotting
-                plot_queue_ch1.put(calibrated_left_magnitude_db)
-                plot_queue_ch2.put(calibrated_right_magnitude_db)
+            # Put the audio data into a plot queue for plotting
+            plot_queue_ch1.put(calibrated_left_magnitude_db)
+            plot_queue_ch2.put(calibrated_right_magnitude_db)
 
-                process_data_egress(calibrated_left_magnitude_db, calibrated_right_magnitude_db)
-                process_data_logging(calibrated_left_magnitude_db, calibrated_right_magnitude_db, opts)
-            else:
-                time.sleep(0.01)  # Sleep for a short period to prevent 100% CPU usage
-    except pika.exceptions.ConnectionClosedByBroker as e:
-        logging.error(f"Connection closed by broker: {e}")
-        channel = reconnect_rabbitmq()  # Reconnect to RabbitMQ
-        process_data_egress(data_ch1, data_ch2)  # Retry after reconnecting
-    except pika.exceptions.AMQPConnectionError as e:
-        logging.error(f"Connection error: {e}")
-        channel = reconnect_rabbitmq()  # Reconnect to RabbitMQ
-        process_data_egress(data_ch1, data_ch2)  # Retry after reconnecting
-    except ConnectionResetError as e:
-        logging.error(f"Connection reset by peer: {e}")
-        channel = reconnect_rabbitmq()  # Reconnect to RabbitMQ
-        process_data_egress(data_ch1, data_ch2)  # Retry after reconnecting
-    except Exception as e:
-        logging.error(f"Error reconnecting to RabbitMQ: {str(e)}")
-        time.sleep(5)  # Sleep for a short time before retrying
-        return reconnect_rabbitmq()  # Retry reconnecting
+            process_data_egress(calibrated_left_magnitude_db, calibrated_right_magnitude_db)
+            process_data_logging(calibrated_left_magnitude_db, calibrated_right_magnitude_db, opts)
+        else:
+            time.sleep(0.01)  # Sleep for a short period to prevent 100% CPU usage
 
 def process_data_egress(data_ch1, data_ch2):
     try:
@@ -493,23 +476,23 @@ def process_data_egress(data_ch1, data_ch2):
     except pika.exceptions.ConnectionClosedByBroker as e:
         logging.error(f"Connection closed by broker: {e}")
         channel = reconnect_rabbitmq()  # Reconnect to RabbitMQ
-        # Retry publishing the message after reconnecting
-        process_data_egress(data_ch1, data_ch2)
+        process_data_egress(data_ch1, data_ch2)  # Retry after reconnecting
 
     except pika.exceptions.AMQPConnectionError as e:
         logging.error(f"Connection error: {e}")
         channel = reconnect_rabbitmq()  # Reconnect to RabbitMQ
-        # Retry publishing the message after reconnecting
-        process_data_egress(data_ch1, data_ch2)
+        process_data_egress(data_ch1, data_ch2)  # Retry after reconnecting
 
     except ConnectionResetError as e:
         logging.error(f"Connection reset by peer: {e}")
         channel = reconnect_rabbitmq()  # Reconnect to RabbitMQ
-        # Retry publishing the message after reconnecting
-        process_data_egress(data_ch1, data_ch2)
+        process_data_egress(data_ch1, data_ch2)  # Retry after reconnecting
 
     except Exception as e:
-        logging.error(f"Error in data egress: {e}")
+        logging.error(f"Error reconnecting to RabbitMQ: {str(e)}")
+        time.sleep(5)  # Sleep for a short time before retrying
+        return reconnect_rabbitmq()  # Retry reconnecting
+
 
 
 def process_data_egress(data_ch1, data_ch2):
